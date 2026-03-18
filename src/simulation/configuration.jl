@@ -20,12 +20,19 @@ struct Config{A <: AnomalousTransportModel, TC <: ThermalConductivityModel, W <:
     discharge_voltage::Float64
     """
     The propellants to be used. See [Propellants](propellants.md) for more.
+    """
+    propellants::Vector{Propellant}
 
+    """
     ---
     # Optional fields
     ---
     """
-    propellants::Vector{Propellant}
+
+    """
+    The potential difference between anode and IE, in V. Used to set the intermediate boundary condition for electrostatic potential.
+    """
+    discharge_voltage_IE::Float64
     """
     The potential at the right boundary of the simulation. **Default:** `0`
     """
@@ -156,6 +163,7 @@ struct Config{A <: AnomalousTransportModel, TC <: ThermalConductivityModel, W <:
             discharge_voltage,
             propellants = nothing,
             # Optional arguments
+            discharge_voltage_IE = discharge_voltage,
             cathode_coupling_voltage = 0.0,
             anode_boundary_condition = :sheath,
             cathode_Tev = 2.0,
@@ -219,6 +227,8 @@ struct Config{A <: AnomalousTransportModel, TC <: ThermalConductivityModel, W <:
 
         # Convert to Float64 if using Unitful
         discharge_voltage = convert_to_float64(discharge_voltage, units(:V))
+        discharge_voltage_IE = convert_to_float64(discharge_voltage_IE, units(:V))
+
         cathode_coupling_voltage = convert_to_float64(cathode_coupling_voltage, units(:V))
 
         anode_Tev = convert_to_float64(anode_Tev, units(:eV))
@@ -244,6 +254,7 @@ struct Config{A <: AnomalousTransportModel, TC <: ThermalConductivityModel, W <:
             discharge_voltage,
             propellants,
             # Optional arguments
+            discharge_voltage_IE,
             cathode_coupling_voltage,
             anode_boundary_condition,
             anode_Tev,
@@ -351,6 +362,7 @@ function params_from_config(config)
         plume_loss_scale = config.electron_plume_loss_scale,
         anom_smoothing_iters = config.anom_smoothing_iters,
         discharge_voltage = config.discharge_voltage,
+        discharge_voltage_IE = config.discharge_voltage_IE,
         cathode_coupling_voltage = config.cathode_coupling_voltage,
         electron_ion_collisions = config.electron_ion_collisions,
     )
