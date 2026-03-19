@@ -34,6 +34,10 @@ struct Config{A <: AnomalousTransportModel, TC <: ThermalConductivityModel, W <:
     """
     discharge_voltage_IE::Float64
     """
+    The axial position of the IE. Used to set the intermediate boundary condition for electrostatic potential.
+    """
+    IE_position::Float64
+    """
     The potential at the right boundary of the simulation. **Default:** `0`
     """
     cathode_coupling_voltage::Float64
@@ -164,6 +168,7 @@ struct Config{A <: AnomalousTransportModel, TC <: ThermalConductivityModel, W <:
             propellants = nothing,
             # Optional arguments
             discharge_voltage_IE = discharge_voltage,
+            IE_position = 0.0,
             cathode_coupling_voltage = 0.0,
             anode_boundary_condition = :sheath,
             cathode_Tev = 2.0,
@@ -255,6 +260,7 @@ struct Config{A <: AnomalousTransportModel, TC <: ThermalConductivityModel, W <:
             propellants,
             # Optional arguments
             discharge_voltage_IE,
+            IE_position,
             cathode_coupling_voltage,
             anode_boundary_condition,
             anode_Tev,
@@ -363,6 +369,7 @@ function params_from_config(config)
         anom_smoothing_iters = config.anom_smoothing_iters,
         discharge_voltage = config.discharge_voltage,
         discharge_voltage_IE = config.discharge_voltage_IE,
+        IE_position = config.IE_position,
         cathode_coupling_voltage = config.cathode_coupling_voltage,
         electron_ion_collisions = config.electron_ion_collisions,
     )
