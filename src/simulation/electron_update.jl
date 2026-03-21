@@ -3,6 +3,9 @@ function update_electrons!(params, config, t = 0)
     (; Tev, ne, nϵ, νan, νc, νen, νei, radial_loss_frequency, Z_eff, νiz, νex, νew_momentum, κ) = params.cache
     (; source_energy, wall_loss_model, conductivity_model, anom_model) = config
 
+    t_ms = t*1e3
+    @printf("updating electrons at time: %.5f ms\n", t_ms)
+
     # Update electron temperature given new density
     update_temperature!(Tev, nϵ, ne)
 
