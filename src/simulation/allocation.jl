@@ -75,6 +75,8 @@ function allocate_arrays(ncells::Int, propellants, n_anom_vars::Int)
         # Neutral density
         γ_SEE = zeros(ncells),
         Id = [0.0],
+        Id_L_IE = [0.0],
+        Id_IE_R = [0.0],
         Vs = [0.0],
         anom_multiplier = [1.0],
 

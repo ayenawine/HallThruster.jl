@@ -58,7 +58,7 @@ function update_electrical_vars!(params)
     (; cache, anom_smoothing_iters, landmark, grid) = params
     (;
         cell_cache_1, νan, νe, νc, μ, B, νew_momentum, anom_multiplier,
-        Vs, ue, ji, channel_area, ne, Id, K, pe, ∇pe, ϕ, ∇ϕ,
+        Vs, ue, ji, channel_area, ne, Id, Id_L_IE, Id_IE_R, K, pe, ∇pe, ϕ, ∇ϕ,
     ) = cache
 
     # Smooth anomalous transport model
@@ -88,14 +88,27 @@ function update_electrical_vars!(params)
 
     # Compute the discharge current by integrating the momentum equation over the whole domain
     V_L = params.discharge_voltage + Vs[]
-    V_R = params.cathode_coupling_voltage
+    V_IE = V_L - params.discharge_voltage_IE
+    V_R = params.cathode_coupling_voltage # usually zero
 
     apply_drag = !landmark && params.iteration[] > 5
 
-    Id[] = integrate_discharge_current(grid, cache, V_L, V_R, apply_drag)
+    if params.discharge_voltage_IE > 0
+        Id_L_IE[] = integrate_discharge_current(grid, cache, V_L, V_IE, apply_drag)
+        Id_IE_R[] = integrate_discharge_current(grid, cache, V_IE, V_R, apply_drag)
+        Id[] = Id_L_IE[] + Id_IE_R[]
+        ie_index = argmin(abs.(grid.cell_centers .- params.IE_position))
+    else
+        Id_L_IE[] = NaN
+        Id_IE_R[] = NaN
+        Id[] = integrate_discharge_current(grid, cache, V_L, V_R, apply_drag)
+        ie_index = NaN
+    end
+    @printf("  Discharge current: Id: %.3f Id_L_IE: %.3f Id_IE_R: %.3f\n", Id[], Id_L_IE[], Id_IE_R[])
+    @printf("  ie_index: %d\n", ie_index)
 
     # Compute electric field and potential
-    update_electric_field!(∇ϕ, cache, apply_drag)
+    update_electric_field!(∇ϕ, ie_index, cache, apply_drag)
     integrate_potential!(ϕ, ∇ϕ, grid, V_L)
 
     # Compute the electron velocity and electron kinetic energy

@@ -1,12 +1,13 @@
-function update_electric_field!(∇ϕ, cache, apply_drag)
+function update_electric_field!(∇ϕ, ie_idx, cache, apply_drag)
     # ∇ϕ : mutable array of electric field values (discrete potential gradient over domain)
     #         updated in place. convention in this code: ∇ϕ[i] = -E where E is electric field.
+    # ie_idx : index of the intermediate electrode
     # cache : named tuple with cached plasma fields (cell-centered arrays + scalar discharge current)
     #    ji             : ion current density array (A/m^2)
     #    Id             : discharge current scalar (Ref{Float64}, A)
     #    ne             : electron density array (m^-3)
     #    μ              : electron mobility array (m^2/V/s)
-    #    ∇pe           : electron pressure gradient array (Pa/m or appropriate unit)
+    #    ∇pe            : electron pressure gradient array (Pa/m or appropriate unit)
     #    channel_area   : channel cross-section area array (m^2)
     #    νei            : electron-ion collision frequency array (s^-1)
     #    νen            : electron-neutral collision frequency array (s^-1)
@@ -15,18 +16,40 @@ function update_electric_field!(∇ϕ, cache, apply_drag)
     #    avg_neutral_vel: mean neutral velocity array (m/s)
     # apply_drag : Bool; if true include drag corrections from ion/neutrals in E-field update.
 
-    (; ji, Id, ne, μ, ∇pe, channel_area, νei, νen, νan, avg_ion_vel, avg_neutral_vel) = cache
+    (; ji, Id, Id_L_IE, Id_IE_R, ne, μ, ∇pe, channel_area, νei, νen, νan, avg_ion_vel, avg_neutral_vel) = cache
 
-    @inbounds for i in eachindex(∇ϕ)
-        E = ((Id[] / channel_area[i] - ji[i]) / e / μ[i] - ∇pe[i]) / ne[i]
+    if ie_idx > 0
+        @printf("  calculating E in double mode\n")
+        # calculate E assuming intermediate electrode
+        @inbounds for i in eachindex(∇ϕ)
+            if i <= ie_idx
+                E = ((Id_L_IE[] / channel_area[i] - ji[i]) / e / μ[i] - ∇pe[i]) / ne[i]
+            else
+                E = ((Id_IE_R[] / channel_area[i] - ji[i]) / e / μ[i] - ∇pe[i]) / ne[i]
+            end
 
-        if (apply_drag)
-            ion_drag = avg_ion_vel[i] * (νei[i] + νan[i]) * me / e
-            neutral_drag = avg_neutral_vel[i] * νen[i] * me / e
-            E += ion_drag + neutral_drag
+            if (apply_drag)
+                ion_drag = avg_ion_vel[i] * (νei[i] + νan[i]) * me / e
+                neutral_drag = avg_neutral_vel[i] * νen[i] * me / e
+                E += ion_drag + neutral_drag
+            end
+
+            ∇ϕ[i] = -E
         end
+    else
+        @printf("  calculating E in single mode\n")
+        # calcualte E assuming no intermediate electrode (default case)
+        @inbounds for i in eachindex(∇ϕ)
+            E = ((Id[] / channel_area[i] - ji[i]) / e / μ[i] - ∇pe[i]) / ne[i]
 
-        ∇ϕ[i] = -E
+            if (apply_drag)
+                ion_drag = avg_ion_vel[i] * (νei[i] + νan[i]) * me / e
+                neutral_drag = avg_neutral_vel[i] * νen[i] * me / e
+                E += ion_drag + neutral_drag
+            end
+
+            ∇ϕ[i] = -E
+        end
     end
 
     return ∇ϕ
@@ -57,6 +80,7 @@ function integrate_potential!(ϕ, ∇ϕ, grid, V_L)
     grid.cell_centers[1], grid.cell_centers[end] = zL, zR
     ∇ϕ[1], ∇ϕ[end] = EL, ER
 
+    # debug printout
     @printf("  EL: %.3f V/m, ER: %.3f V/m, zL: %.3f cm, zR: %.3f cm\n", EL, ER, zL*100, zR*100)
 
     return
