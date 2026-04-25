@@ -1,6 +1,7 @@
 function update_electric_field!(∇ϕ, ie_idx, cache, apply_drag)
     # ∇ϕ : mutable array of electric field values (discrete potential gradient over domain)
     #         updated in place. convention in this code: ∇ϕ[i] = -E where E is electric field.
+    #         E is calculated from Ohm's law
     # ie_idx : index of the intermediate electrode
     # cache : named tuple with cached plasma fields (cell-centered arrays + scalar discharge current)
     #    ji             : ion current density array (A/m^2)
@@ -34,7 +35,7 @@ function update_electric_field!(∇ϕ, ie_idx, cache, apply_drag)
                 E += ion_drag + neutral_drag
             end
 
-            ∇ϕ[i] = -E
+            ∇ϕ[i] = -E # electric field, E is the negative gradient of the electrostatic potential
         end
     else
         @printf("  calculating E in single mode\n")
@@ -55,7 +56,7 @@ function update_electric_field!(∇ϕ, ie_idx, cache, apply_drag)
     return ∇ϕ
 end
 
-function integrate_potential!(ϕ, ∇ϕ, grid, V_L)
+function integrate_potential!(ϕ, ∇ϕ, grid, V_L, V_IE, ie_idx)
     # We need to make sure the potential is integrated from the left edge to the right edge,
     # rather than from the left ghost cell center to the right ghost cell center
 
@@ -70,15 +71,36 @@ function integrate_potential!(ϕ, ∇ϕ, grid, V_L)
     ∇ϕ[end] = 0.5 * (ER + ∇ϕ[end - 1])
 
     # Integrate potential from left to right edge
-    cumtrapz!(ϕ, grid.cell_centers, ∇ϕ, V_L)
+    #cumtrapz!(ϕ, grid.cell_centers, ∇ϕ, V_L)
+
+    if ie_idx > 0 && !isnan(V_IE)
+    # Left region: integrate from V_L, up to and including ie_idx
+        cumtrapz!(
+            view(ϕ, 1:ie_idx),
+            view(grid.cell_centers, 1:ie_idx),
+            view(∇ϕ, 1:ie_idx),
+            V_L,
+        )
+        # Right region: restart from V_IE at the IE boundary
+        cumtrapz!(
+            view(ϕ, ie_idx+1:length(ϕ)),
+            view(grid.cell_centers, ie_idx+1:length(grid.cell_centers)),
+            view(∇ϕ, ie_idx+1:length(∇ϕ)),
+            V_IE,
+        )
+    else
+        cumtrapz!(ϕ, grid.cell_centers, ∇ϕ, V_L)
+    end
 
     # Extrapolate potential to ghost cells
     ϕ[1] = ϕ[1] + (ϕ[1] - ϕ[2])
     ϕ[end] = ϕ[end] + (ϕ[end] - ϕ[end - 1])
 
-    # Replace electric field and cell center values
+    # Replace electric field and cell center with original values
     grid.cell_centers[1], grid.cell_centers[end] = zL, zR
     ∇ϕ[1], ∇ϕ[end] = EL, ER
+
+    
 
     # debug printout
     @printf("  EL: %.3f V/m, ER: %.3f V/m, zL: %.3f cm, zR: %.3f cm\n", EL, ER, zL*100, zR*100)
@@ -92,7 +114,7 @@ function anode_sheath_potential(params)
         return 0.0
     end
     (; anode_bc, cache) = params
-    (; ne, ji, channel_area, Tev, Id) = cache
+    (; ne, ji, channel_area, Tev, Id, Id_L_IE) = cache
 
     # Compute anode sheath potential
     @inbounds if anode_bc == :sheath
@@ -102,8 +124,12 @@ function anode_sheath_potential(params)
         ce = sqrt(8 * e * Te_sheath_edge / π / me)
         je_sheath = e * ne_sheath_edge * ce / 4
 
-        # discharge current density
-        jd = Id[] / channel_area[1]
+        # discharge current density [A/m^2]
+        if params.discharge_voltage_IE > 0
+            jd = Id_L_IE[] / channel_area[1] # use current on left side of IE if IE is present, since anode sheath is on left side of domain
+        else
+            jd = Id[] / channel_area[1]
+        end
 
         # current densities at sheath edge
         ji_sheath_edge = 0.5 * (ji[1] + ji[2])

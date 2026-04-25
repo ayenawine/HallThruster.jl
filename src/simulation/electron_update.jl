@@ -88,33 +88,47 @@ function update_electrical_vars!(params)
 
     # Compute the discharge current by integrating the momentum equation over the whole domain
     V_L = params.discharge_voltage + Vs[]
-    V_IE = V_L - params.discharge_voltage_IE
     V_R = params.cathode_coupling_voltage # usually zero
 
     apply_drag = !landmark && params.iteration[] > 5
 
     if params.discharge_voltage_IE > 0
-        Id_L_IE[] = integrate_discharge_current(grid, cache, V_L, V_IE, apply_drag)
-        Id_IE_R[] = integrate_discharge_current(grid, cache, V_IE, V_R, apply_drag)
-        Id[] = Id_L_IE[] + Id_IE_R[]
         ie_index = argmin(abs.(grid.cell_centers .- params.IE_position))
+        V_IE = V_L - params.discharge_voltage_IE # if discharge_voltage is 500, and discharge_voltage_IE is 100, then the voltage at IE is 400 V
+    else
+        ie_index = 0
+        V_IE = NaN
+    end
+
+    if ie_index != 0
+        cell_range_A = 1:ie_index
+        Id_L_IE[] = integrate_discharge_current(grid, cache, V_L, V_IE, apply_drag, cell_range_A)
+        cell_range_B = ie_index+1:length(grid.cell_centers)
+        Id_IE_R[] = integrate_discharge_current(grid, cache, V_IE, V_R, apply_drag, cell_range_B)
+        Id[] = NaN
     else
         Id_L_IE[] = NaN
         Id_IE_R[] = NaN
-        Id[] = integrate_discharge_current(grid, cache, V_L, V_R, apply_drag)
-        ie_index = NaN
+        cell_range = 1:length(grid.cell_centers)
+        Id[] = integrate_discharge_current(grid, cache, V_L, V_R, apply_drag, cell_range)
     end
     @printf("  Discharge current: Id: %.3f Id_L_IE: %.3f Id_IE_R: %.3f\n", Id[], Id_L_IE[], Id_IE_R[])
     @printf("  ie_index: %d\n", ie_index)
 
     # Compute electric field and potential
-    update_electric_field!(∇ϕ, ie_index, cache, apply_drag)
-    integrate_potential!(ϕ, ∇ϕ, grid, V_L)
+    update_electric_field!(∇ϕ, ie_index, cache, apply_drag) # ∇ϕ is updated in place from electric field solve
+    integrate_potential!(ϕ, ∇ϕ, grid, V_L, V_IE, ie_index) # integrates ϕ from ∇ϕ and applies boundary conditions, updates ϕ in place
 
     # Compute the electron velocity and electron kinetic energy
     @inbounds for i in eachindex(ue)
         # je + ji = Id / A
-        ue[i] = (ji[i] - Id[] / channel_area[i]) / e / ne[i]
+        if i > ie_index && params.discharge_voltage_IE > 0
+            ue[i] = (ji[i] - Id_IE_R[] / channel_area[i]) / e / ne[i]
+        elseif i <= ie_index && params.discharge_voltage_IE > 0
+            ue[i] = (ji[i] - Id_L_IE[] / channel_area[i]) / e / ne[i]
+        else
+            ue[i] = (ji[i] - Id[] / channel_area[i]) / e / ne[i]
+        end
     end
 
     # Kinetic energy in both axial and azimuthal directions is accounted for
@@ -123,14 +137,25 @@ function update_electrical_vars!(params)
 end
 
 # Compute the axially-constant discharge current using Ohm's law
-function integrate_discharge_current(grid, cache, V_L, V_R, apply_drag)
+# Eq. 19 from "Numerical and Experimental Investigation of Longitudinal Oscillations in Hall Thrusters"
+# https://www.mdpi.com/2226-4310/8/6/148
+function integrate_discharge_current(grid, cache, V_L, V_R, apply_drag, cell_range)
     (; ∇pe, μ, ne, ji, channel_area, avg_neutral_vel, avg_ion_vel, νei, νen, νan) = cache
+
+    # context
+    # ΔV = ∫ [ji/(e·ne·μ) + ∇pe/(e·ne)] dz  -  Id · ∫ [1/(e·ne·μ·A)] dz
+    # integrand_1 = ji/(e·μ·ne) + ∇pe/(e·ne)
+    # integrant_2 = 1/(e·ne·μ·A)
+    # ΔV = int1 - Id * int2,
+    # Id = (ΔV + int1) / int2, solve for Id since it's the unknown
+
 
     # Compute integrands at all cell centers
     integrand_1 = cache.cell_cache_1
     integrand_2 = cache.cell_cache_2
 
-    @inbounds for i in eachindex(grid.cell_centers)
+    #@inbounds for i in eachindex(grid.cell_centers)
+    @inbounds for i in cell_range # only compute over specified cell range, to allow separate integration over IE and non-IE regions
         integrand_1[i] = (ji[i] / e / μ[i] + ∇pe[i]) / ne[i]
         integrand_2[i] = inv(e * ne[i] * μ[i] * channel_area[i])
 
@@ -141,16 +166,24 @@ function integrate_discharge_current(grid, cache, V_L, V_R, apply_drag)
         end
     end
 
-    # Replace left and right values with edge values
-    integrand_1[1] = 0.5 * (integrand_1[1] + integrand_1[2])
-    integrand_1[end] = 0.5 * (integrand_1[end - 1] + integrand_1[end])
-    integrand_2[1] = 0.5 * (integrand_2[1] + integrand_2[2])
-    integrand_2[end] = 0.5 * (integrand_2[end - 1] + integrand_2[end])
+    # old method: Replace left and right values with edge values
+    #integrand_1[1] = 0.5 * (integrand_1[1] + integrand_1[2])
+    #integrand_1[end] = 0.5 * (integrand_1[end - 1] + integrand_1[end])
+    #integrand_2[1] = 0.5 * (integrand_2[1] + integrand_2[2])
+    #integrand_2[end] = 0.5 * (integrand_2[end - 1] + integrand_2[end])
+
+    # new method: only replace values at edges of the cell range being integrated over
+    integrand_1[first(cell_range)] = 0.5 * (integrand_1[first(cell_range)] + integrand_1[first(cell_range)+1])
+    integrand_1[last(cell_range)]  = 0.5 * (integrand_1[last(cell_range)-1] + integrand_1[last(cell_range)])
+    integrand_2[first(cell_range)] = 0.5 * (integrand_2[first(cell_range)] + integrand_2[first(cell_range)+1])
+    integrand_2[last(cell_range)]  = 0.5 * (integrand_2[last(cell_range)-1] + integrand_2[last(cell_range)])
 
     # Compute integrals using trapezoidal rule around edges
     int1 = 0.0
     int2 = 0.0
-    @inbounds for (i, z_edge) in enumerate(grid.edges)
+    #@inbounds for (i, z_edge) in enumerate(grid.edges)
+    edge_range = first(cell_range):(last(cell_range) - 1)
+    @inbounds for (i, z_edge) in zip(edge_range, grid.edges[edge_range])
         zL = grid.cell_centers[i]
         zR = grid.cell_centers[i + 1]
 
@@ -161,9 +194,16 @@ function integrate_discharge_current(grid, cache, V_L, V_R, apply_drag)
         f2_R = integrand_2[i + 1]
 
         # account for boundary cells
-        if i == 1 || i == length(grid.edges)
+        #if i == 1 || i == length(grid.edges)
+        #    zL = z_edge
+        #elseif i == length(grid.edges)
+        #    zR = z_edge
+        #end
+
+        if i == first(edge_range)
             zL = z_edge
-        elseif i == length(grid.edges)
+        end
+        if i == last(edge_range)
             zR = z_edge
         end
 

@@ -167,7 +167,7 @@ struct Config{A <: AnomalousTransportModel, TC <: ThermalConductivityModel, W <:
             discharge_voltage,
             propellants = nothing,
             # Optional arguments
-            discharge_voltage_IE = discharge_voltage,
+            discharge_voltage_IE = 0.0,
             IE_position = 0.0,
             cathode_coupling_voltage = 0.0,
             anode_boundary_condition = :sheath,
